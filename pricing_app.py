@@ -40,7 +40,7 @@ def calculate_price(material, grams, printing_time_hours,
     elif service_type == "design":
         service_cost = design_hours * design_price
     elif service_type == "design_and_print":
-        service_cost = design_hours * design_price + 5000
+        service_cost = design_hours * design_price + printing_cost
     else:
         service_cost = 0
 
