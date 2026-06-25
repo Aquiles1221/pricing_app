@@ -72,7 +72,7 @@ def build_report(data):
     lines = []
     lines.append("=" * 58)
     lines.append("   REPORTE TÉCNICO DE COTIZACIÓN")
-    lines.append("   Fragua — Diseño CAD y Manufactura Aditiva")
+    lines.append("   Cotizador Piezas 3D — Diseño CAD y Manufactura Aditiva")
     lines.append("=" * 58)
     lines.append("")
     lines.append(f"Fecha           : {data['fecha']}")
@@ -142,7 +142,7 @@ def build_report(data):
 # UI PRINCIPAL
 # ======================================================
 
-st.set_page_config(page_title="Fragua — Cotizador", page_icon="🛠️", layout="centered")
+st.set_page_config(page_title="Cotizador Piezas 3D", page_icon="🛠️", layout="centered")
 
 tab_cot, tab_tutorial = st.tabs(["🛠️ Cotizar", "📘 Tutorial"])
 
@@ -150,7 +150,7 @@ tab_cot, tab_tutorial = st.tabs(["🛠️ Cotizar", "📘 Tutorial"])
 # PESTAÑA: COTIZAR
 # ------------------------------------------------------
 with tab_cot:
-    st.title("🛠️ Cotizador Fragua")
+    st.title("🛠️ Cotizador Piezas 3D")
     st.caption("Diseño CAD + Manufactura aditiva")
 
     cliente = st.text_input("Nombre del cliente")
