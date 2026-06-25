@@ -285,57 +285,133 @@ with tab_tutorial:
     st.markdown(
         """
 ### Idea general
-La app calcula un precio justo separando **tres cosas distintas**:
-diseño, impresión y trabajo manual. No mezcles las tres en "una tarifa por hora".
+La herramienta calcula el precio de un trabajo separando tres componentes
+independientes: **diseño**, **impresión** y **trabajo manual**. Cada uno
+responde a una lógica de costo distinta, por lo que se cotizan por separado
+y no bajo una única tarifa horaria.
 
 ---
 
-### 1. Diseño — tarifa fija, no por hora
-El diseño se cobra **por entregable**, no por el tiempo que tardaste.
-Un archivo CAD vale lo mismo si lo hiciste en 30 min o en 3 horas, porque el
-cliente paga por el **resultado** (un archivo que puede reutilizar).
+### 1. Diseño — tarifa fija por entregable
+El diseño se cobra por **entregable**, no por el tiempo invertido. El valor de
+un archivo CAD no depende de cuánto se tardó en producirlo, sino del resultado
+que recibe el cliente: un archivo reutilizable que puede emplear en producción.
 
 - Pieza simple: $18.000
-- Pieza con plano técnico: $25.000
-- Transferencia de archivos nativos: $12.000
+- Pieza con plano técnico de fabricación: $25.000
+- Transferencia de archivos CAD nativos: $12.000
 
-> Si el cliente va a producir en serie con tus archivos, eso es un activo.
-> No lo regales cobrando "media hora".
+Cuando un diseño servirá de base para producción en serie, constituye un activo
+para el cliente. La tarifa debe reflejar ese valor, no únicamente las horas de
+modelado.
 
 ---
 
-### 2. Impresión — material + energía + tamaño
-El costo del filamento es bajo (~$1.000 por pieza mediana). Tu **margen real**
-está en la **tarifa por tamaño**:
+### 2. Impresión — material, energía y tamaño
+El costo del filamento por pieza es bajo (aproximadamente $1.000 para una pieza
+mediana). El margen del servicio se asigna mediante la **tarifa por tamaño**,
+que cubre desgaste de equipo, tiempo de operación y utilidad:
 
 - Pequeña (< 50 g): $3.000
 - Mediana (50–150 g): $5.000
 - Grande (> 150 g): $8.000
 
-Ingresa cuántas piezas distintas hay; cada una puede tener material, gramaje,
-tiempo y cantidad propios.
+Indica cuántas piezas distintas incluye el trabajo; cada una admite su propio
+material, gramaje, tiempo y cantidad.
 
 ---
 
 ### 3. Post-procesado y despacho
-- Trabajo manual (lijado, ensamblaje): $5.000/hora.
-- Despacho: $4.000 fijo.
+- Trabajo manual (lijado, ensamblaje, acabado): $5.000/hora.
+- Despacho: $4.000 (tarifa fija).
 
 ---
 
 ### 4. Reporte técnico
-Al calcular, descarga un **.txt** limpio para enviar al cliente. Un solo
-documento, precio por ítem, sin desglose de horas que invite a negociar.
+Al calcular, la herramienta genera un archivo **.txt** con el desglose por ítem,
+listo para enviar al cliente como cotización formal.
 
 ---
 
-### 5. Registro contable (a futuro)
-El botón verde dejará todo listo para la **Operación Renta** y la contabilidad
-de la SpA cuando formalicemos. Por ahora está pre-hecho, sin función activa.
+### 5. Registro contable (en desarrollo)
+El botón de registro contable dejará la cotización preparada para la **Operación
+Renta** anual y la contabilidad de la SpA. Actualmente está pre-implementado, sin
+función activa.
 
 ---
 
 ### Formato de tiempo
-Siempre `HHhMMm`. Ejemplos: `01h35m`, `00h45m`, `02h00m`.
+Usa siempre el formato `HHhMMm`. Ejemplos: `01h35m`, `00h45m`, `02h00m`.
+
+---
+
+### Modelo de costos
+
+El precio total es la suma de los tres componentes más los extras:
+
+$$
+P_{total} = C_{diseño} + C_{impresión} + C_{manual} + C_{despacho}
+$$
+
+**Diseño** — suma de las tarifas fijas de los entregables seleccionados:
+
+$$
+C_{diseño} = \\sum_{i=1}^{n} D_i
+$$
+
+**Impresión** — para cada pieza, material más energía más tarifa de tamaño,
+multiplicado por la cantidad:
+
+$$
+C_{impresión} = \\sum_{j=1}^{m} q_j \\left( g_j \\cdot p_{m_j} + t_j \\cdot W \\cdot E + F_{s_j} \\right)
+$$
+
+**Trabajo manual** — horas por la tarifa horaria:
+
+$$
+C_{manual} = h \\cdot R_{manual}
+$$
+
+**Despacho** — tarifa fija si aplica:
+
+$$
+C_{despacho} = \\begin{cases} F_{despacho} & \\text{si requiere despacho} \\\\ 0 & \\text{en caso contrario} \\end{cases}
+$$
+
+---
+
+#### Variables
+
+| Símbolo | Variable | Unidad |
+|---|---|---|
+| $P_{total}$ | Precio total de la cotización | CLP |
+| $D_i$ | Tarifa fija del entregable de diseño $i$ | CLP |
+| $n$ | Número de entregables de diseño | — |
+| $q_j$ | Cantidad de la pieza $j$ | unidades |
+| $g_j$ | Masa de material de la pieza $j$ | g |
+| $p_{m_j}$ | Precio del material de la pieza $j$ | CLP/g |
+| $t_j$ | Tiempo de impresión de la pieza $j$ | h |
+| $W$ | Potencia de la impresora | kW |
+| $E$ | Precio de la electricidad | CLP/kWh |
+| $F_{s_j}$ | Tarifa por tamaño de la pieza $j$ | CLP |
+| $m$ | Número de piezas distintas | — |
+| $h$ | Horas de trabajo manual | h |
+| $R_{manual}$ | Tarifa de trabajo manual | CLP/h |
+| $F_{despacho}$ | Tarifa fija de despacho | CLP |
+
+---
+
+#### Valores actuales de los parámetros
+
+| Parámetro | Símbolo | Valor |
+|---|---|---|
+| Potencia de impresora | $W$ | 0,13 kW |
+| Precio electricidad | $E$ | 200 CLP/kWh |
+| Material PLA | $p_m$ | 20 CLP/g |
+| Material ABS | $p_m$ | 13 CLP/g |
+| Material PETG | $p_m$ | 16 CLP/g |
+| Material TPU | $p_m$ | 25 CLP/g |
+| Tarifa manual | $R_{manual}$ | 5.000 CLP/h |
+| Despacho | $F_{despacho}$ | 4.000 CLP |
 """
     )
