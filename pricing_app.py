@@ -1,6 +1,16 @@
 import streamlit as st
 import re
+from io import BytesIO
 from datetime import date
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+)
+from reportlab.lib.enums import TA_RIGHT, TA_LEFT
 
 # ======================================================
 # CONFIGURACIÓN Y CONSTANTES
@@ -67,75 +77,191 @@ def print_cost_single(material, grams, time_hours, size_label):
     }
 
 
-def build_report(data):
-    """Genera el reporte técnico en texto plano."""
-    lines = []
-    lines.append("=" * 58)
-    lines.append("   REPORTE TÉCNICO DE COTIZACIÓN")
-    lines.append("   Cotizador Piezas 3D — Diseño CAD y Manufactura Aditiva")
-    lines.append("=" * 58)
-    lines.append("")
-    lines.append(f"Fecha           : {data['fecha']}")
-    lines.append(f"Cliente         : {data['cliente'] or '[Particular]'}")
-    lines.append(f"Tipo de cliente : {data['tipo_cliente']}")
-    lines.append(f"Servicio        : {data['servicio']}")
-    lines.append(f"Documento legal : {data['doc_legal']}")
-    lines.append("")
+def clp(n):
+    """Formatea un entero como CLP: 25000 -> '$25.000'."""
+    return f"${n:,.0f}".replace(",", ".")
 
+
+def build_report_pdf(data):
+    """Genera el reporte técnico de cotización como PDF profesional."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=22 * mm, rightMargin=22 * mm,
+        topMargin=20 * mm, bottomMargin=20 * mm,
+    )
+
+    ink = colors.HexColor("#1a1a1a")
+    muted = colors.HexColor("#6b6b6b")
+    line = colors.HexColor("#d9d9d9")
+    accent = colors.HexColor("#2b2b2b")
+
+    styles = getSampleStyleSheet()
+    h_company = ParagraphStyle(
+        "company", parent=styles["Normal"], fontName="Helvetica-Bold",
+        fontSize=16, textColor=ink, spaceAfter=2, leading=19,
+    )
+    h_sub = ParagraphStyle(
+        "sub", parent=styles["Normal"], fontName="Helvetica",
+        fontSize=9.5, textColor=muted, spaceAfter=2, leading=12,
+    )
+    doc_title = ParagraphStyle(
+        "doctitle", parent=styles["Normal"], fontName="Helvetica",
+        fontSize=10, textColor=muted, alignment=TA_RIGHT, leading=13,
+    )
+    section = ParagraphStyle(
+        "section", parent=styles["Normal"], fontName="Helvetica-Bold",
+        fontSize=10.5, textColor=accent, spaceBefore=14, spaceAfter=6, leading=13,
+    )
+    body = ParagraphStyle(
+        "body", parent=styles["Normal"], fontName="Helvetica",
+        fontSize=9.5, textColor=ink, leading=14,
+    )
+    note = ParagraphStyle(
+        "note", parent=styles["Normal"], fontName="Helvetica",
+        fontSize=8.5, textColor=muted, leading=12,
+    )
+
+    story = []
+
+    # --- Encabezado ---
+    header_tbl = Table(
+        [[
+            Paragraph("Cotizador Piezas 3D", h_company),
+            Paragraph("COTIZACIÓN", doc_title),
+        ],
+        [
+            Paragraph("Diseño CAD y Manufactura Aditiva", h_sub),
+            Paragraph(data["fecha"], doc_title),
+        ]],
+        colWidths=[100 * mm, 66 * mm],
+    )
+    header_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(header_tbl)
+    story.append(Spacer(1, 6))
+    story.append(Table([[""]], colWidths=[166 * mm], style=TableStyle([
+        ("LINEBELOW", (0, 0), (-1, -1), 1, accent),
+    ])))
+    story.append(Spacer(1, 10))
+
+    # --- Datos del cliente ---
+    info_rows = [
+        ["Cliente", data["cliente"] or "—"],
+        ["Tipo de cliente", data["tipo_cliente"]],
+        ["Servicio", data["servicio"]],
+        ["Documento", data["doc_legal"]],
+    ]
+    info_tbl = Table(
+        [[Paragraph(f"<font color='#6b6b6b'>{k}</font>", body),
+          Paragraph(v, body)] for k, v in info_rows],
+        colWidths=[40 * mm, 126 * mm],
+    )
+    info_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+    ]))
+    story.append(info_tbl)
+
+    def items_table(rows, header):
+        t = Table([header] + rows, colWidths=col_widths)
+        style = [
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("TEXTCOLOR", (0, 0), (-1, 0), accent),
+            ("TEXTCOLOR", (0, 1), (-1, -1), ink),
+            ("ALIGN", (-1, 0), (-1, -1), "RIGHT"),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.75, line),
+            ("LINEBELOW", (0, -1), (-1, -1), 0.5, line),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ]
+        t.setStyle(TableStyle(style))
+        return t
+
+    # --- Diseño ---
     if data["design_items"]:
-        lines.append("-" * 58)
-        lines.append("1. INGENIERÍA Y DISEÑO CAD")
-        lines.append("-" * 58)
-        for name, val in data["design_items"]:
-            lines.append(f"  - {name:<48} {val:>7,} CLP")
-        lines.append(f"  {'Subtotal diseño':<50} {data['design_total']:>7,} CLP")
-        lines.append("")
+        story.append(Paragraph("Ingeniería y diseño CAD", section))
+        col_widths = [126 * mm, 40 * mm]
+        rows = [[Paragraph(name, body), clp(val)] for name, val in data["design_items"]]
+        rows.append([Paragraph("<b>Subtotal diseño</b>", body),
+                     Paragraph(f"<b>{clp(data['design_total'])}</b>", body)])
+        story.append(items_table(rows, ["Concepto", "Valor"]))
 
+    # --- Impresión ---
     if data["print_items"]:
-        lines.append("-" * 58)
-        lines.append("2. MANUFACTURA ADITIVA")
-        lines.append("-" * 58)
-        lines.append(f"  Equipo: {data['printer']}")
-        lines.append("")
-        lines.append(f"  {'Pieza':<10}{'Mat.':<7}{'Masa':<7}{'Tiempo':<9}{'Subtotal':>9}")
+        story.append(Paragraph("Manufactura aditiva", section))
+        story.append(Paragraph(f"Equipo: {data['printer']}", note))
+        story.append(Spacer(1, 4))
+        col_widths = [22 * mm, 30 * mm, 24 * mm, 30 * mm, 60 * mm]
+        rows = []
         for p in data["print_items"]:
-            lines.append(
-                f"  {p['label']:<10}{p['material']:<7}{str(p['grams'])+'g':<7}"
-                f"{p['time']:<9}{p['subtotal']:>7,} CLP"
-            )
-        lines.append(f"  {'Subtotal manufactura':<50} {data['print_total']:>7,} CLP")
-        lines.append("")
+            rows.append([
+                Paragraph(p["label"], body),
+                Paragraph(p["material"], body),
+                Paragraph(f"{p['grams']} g", body),
+                Paragraph(p["time"], body),
+                clp(p["subtotal"]),
+            ])
+        rows.append([Paragraph("<b>Subtotal manufactura</b>", body), "", "", "",
+                     Paragraph(f"<b>{clp(data['print_total'])}</b>", body)])
+        t = items_table(rows, ["Pieza", "Material", "Masa", "Tiempo", "Subtotal"])
+        t.setStyle(TableStyle([("SPAN", (0, -1), (3, -1))]))
+        story.append(t)
 
+    # --- Extras ---
+    extras = []
     if data["handwork_total"] > 0:
-        lines.append("-" * 58)
-        lines.append("3. POST-PROCESADO")
-        lines.append("-" * 58)
-        lines.append(f"  {'Trabajo manual / acabado':<50} {data['handwork_total']:>7,} CLP")
-        lines.append("")
-
+        extras.append([Paragraph("Post-procesado / trabajo manual", body), clp(data["handwork_total"])])
     if data["delivery_total"] > 0:
-        lines.append(f"  {'Despacho':<50} {data['delivery_total']:>7,} CLP")
-        lines.append("")
+        extras.append([Paragraph("Despacho", body), clp(data["delivery_total"])])
+    if extras:
+        story.append(Paragraph("Servicios adicionales", section))
+        col_widths = [126 * mm, 40 * mm]
+        story.append(items_table(extras, ["Concepto", "Valor"]))
 
-    lines.append("-" * 58)
-    lines.append("RESUMEN")
-    lines.append("-" * 58)
-    lines.append(f"  {'TOTAL SERVICIO':<50} {data['total']:>7,} CLP")
-    lines.append(f"  IVA: {data['iva_nota']}")
-    lines.append("")
+    # --- Total ---
+    story.append(Spacer(1, 14))
+    total_tbl = Table(
+        [[Paragraph("<b>TOTAL</b>", ParagraphStyle("tl", parent=body, fontSize=12)),
+          Paragraph(f"<b>{clp(data['total'])}</b>",
+                    ParagraphStyle("tr", parent=body, fontSize=12, alignment=TA_RIGHT))]],
+        colWidths=[126 * mm, 40 * mm],
+    )
+    total_tbl.setStyle(TableStyle([
+        ("LINEABOVE", (0, 0), (-1, 0), 1, accent),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(total_tbl)
+    story.append(Paragraph(data["iva_nota"], note))
 
+    # --- Nota de producción ---
     if data["nota_produccion"]:
-        lines.append("-" * 58)
-        lines.append("NOTA SOBRE PRODUCCIÓN POSTERIOR")
-        lines.append("-" * 58)
-        lines.append("  Esta cotización cubre diseño y prototipos de validación.")
-        lines.append("  La producción en serie se cotiza por separado, con tarifa")
-        lines.append("  unitaria por volumen, y se entiende que la fabricación se")
-        lines.append("  realiza con el mismo proveedor salvo acuerdo en contrario.")
-        lines.append("")
+        story.append(Spacer(1, 16))
+        story.append(Paragraph("Nota sobre producción posterior", section))
+        story.append(Paragraph(
+            "Esta cotización cubre el diseño y los prototipos de validación. La "
+            "producción en serie se cotiza por separado, con tarifa unitaria por "
+            "volumen, y se entiende que la fabricación se realiza con el mismo "
+            "proveedor salvo acuerdo en contrario.", note))
 
-    lines.append("=" * 58)
-    return "\n".join(lines)
+    # --- Pie ---
+    story.append(Spacer(1, 22))
+    story.append(Paragraph(
+        "Cotización válida por 15 días. Precios en pesos chilenos (CLP).", note))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 # ======================================================
@@ -246,13 +372,13 @@ with tab_cot:
         if delivery_total:
             st.write(f"Despacho: ${delivery_total:,}")
 
-        # --- Reporte técnico descargable ---
-        report_txt = build_report(report_data)
+        # --- Reporte técnico descargable (PDF) ---
+        report_pdf = build_report_pdf(report_data)
         st.download_button(
-            label="📄 Descargar reporte técnico (.txt)",
-            data=report_txt.encode("utf-8"),
-            file_name=f"cotizacion_{(cliente or 'cliente').replace(' ', '_')}.txt",
-            mime="text/plain",
+            label="📄 Descargar cotización (.pdf)",
+            data=report_pdf,
+            file_name=f"cotizacion_{(cliente or 'cliente').replace(' ', '_')}.pdf",
+            mime="application/pdf",
         )
 
         st.divider()
