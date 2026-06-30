@@ -52,6 +52,19 @@ SIZE_FEES = {
 
 DELIVERY_FEE = 4000           # CLP
 
+# --- Reparto de pagos entre colaboradores ---
+# Fondo operacional: sale primero, financia materiales/mantención/contador.
+FONDO_OPERACIONAL = 0.08      # 8% del total cobrado
+
+# Gestión: porcentaje variable según el nivel de trabajo del gestor.
+# Sale segundo, después del fondo. Por defecto el gestor eres tú.
+GESTION_TIERS = {
+    "Cliente conseguido + reunión técnica (12%)": 0.12,
+    "Cliente referido directo, gestión media (5%)": 0.05,
+    "Trabajo recurrente, sin gestión activa (3%)": 0.03,
+}
+GESTOR_DEFAULT = "Aquiles"    # editable: nombre del gestor por defecto
+
 # ======================================================
 # FUNCIONES AUXILIARES
 # ======================================================
@@ -270,7 +283,7 @@ def build_report_pdf(data):
 
 st.set_page_config(page_title="Cotizador Piezas 3D", page_icon="🛠️", layout="centered")
 
-tab_cot, tab_tutorial = st.tabs(["🛠️ Cotizar", "📘 Tutorial"])
+tab_cot, tab_liq, tab_tutorial = st.tabs(["🛠️ Cotizar", "💸 Liquidación", "📘 Tutorial"])
 
 # ------------------------------------------------------
 # PESTAÑA: COTIZAR
@@ -399,6 +412,106 @@ with tab_cot:
             st.info(
                 "Función pendiente de desarrollo. Registrará la cotización en el "
                 "libro contable (monto, retención, boleta, RUT) para uso tributario."
+            )
+
+
+# ------------------------------------------------------
+# PESTAÑA: LIQUIDACIÓN (reparto entre colaboradores)
+# ------------------------------------------------------
+with tab_liq:
+    st.title("💸 Liquidación por rol")
+    st.caption("Reparto justo según el valor que aporta cada colaborador.")
+
+    st.markdown(
+        "Ingresa el valor cobrado al cliente por cada componente del trabajo. "
+        "El reparto se calcula sobre el **total cobrado**: primero sale el fondo "
+        "operacional, luego la gestión, y lo restante se divide entre los roles "
+        "según el valor que cada uno generó."
+    )
+
+    st.subheader("Valor por componente (CLP)")
+    col1, col2 = st.columns(2)
+    with col1:
+        liq_design = st.number_input("Diseño CAD", min_value=0, step=1000, value=0, key="liq_d")
+        liq_print = st.number_input("Impresión", min_value=0, step=1000, value=0, key="liq_p")
+    with col2:
+        liq_handwork = st.number_input("Post-procesado", min_value=0, step=1000, value=0, key="liq_h")
+        liq_delivery = st.number_input("Despacho", min_value=0, step=1000, value=0, key="liq_del")
+
+    st.subheader("Personas por rol")
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        n_design = st.number_input("Diseñadores", min_value=0, max_value=10, value=1, step=1, key="n_d")
+        n_print = st.number_input("Operadores de impresión", min_value=0, max_value=10, value=1, step=1, key="n_p")
+    with cc2:
+        n_handwork = st.number_input("Post-procesado", min_value=0, max_value=10, value=0, step=1, key="n_h")
+        n_delivery = st.number_input("Despacho", min_value=0, max_value=10, value=0, step=1, key="n_del")
+
+    st.subheader("Gestión")
+    gestor = st.text_input("Nombre del gestor (quien trajo al cliente)", value=GESTOR_DEFAULT)
+    gestion_tier = st.selectbox("Nivel de gestión", list(GESTION_TIERS.keys()))
+
+    if st.button("Calcular liquidación", type="primary", key="btn_liq"):
+        total_cobrado = liq_design + liq_print + liq_handwork + liq_delivery
+
+        if total_cobrado == 0:
+            st.warning("Ingresa al menos un valor para calcular la liquidación.")
+        else:
+            # 1. Fondo operacional (sale primero)
+            fondo = round(total_cobrado * FONDO_OPERACIONAL)
+            # 2. Gestión (sale segundo)
+            gestion_pct = GESTION_TIERS[gestion_tier]
+            gestion = round(total_cobrado * gestion_pct)
+            # 3. Restante a repartir entre roles
+            disponible = total_cobrado - fondo - gestion
+
+            # Cada rol recibe en proporción al valor que generó.
+            roles = [
+                ("Diseño", liq_design, n_design),
+                ("Impresión", liq_print, n_print),
+                ("Post-procesado", liq_handwork, n_handwork),
+                ("Despacho", liq_delivery, n_delivery),
+            ]
+            valor_total_roles = sum(v for _, v, _ in roles)
+
+            st.success(f"💰 Total cobrado al cliente: ${total_cobrado:,}")
+
+            st.markdown("#### Descuentos previos")
+            st.write(f"Fondo operacional ({int(FONDO_OPERACIONAL*100)}%): ${fondo:,}")
+            st.write(f"Gestión — {gestor} ({int(gestion_pct*100)}%): ${gestion:,}")
+            st.write(f"**Disponible para roles: ${disponible:,}**")
+
+            st.markdown("#### Pago por colaborador")
+            resumen = []
+            for nombre, valor, n_personas in roles:
+                if valor == 0 or n_personas == 0:
+                    continue
+                # proporción del valor de este rol sobre el total de roles
+                share_rol = round(disponible * (valor / valor_total_roles))
+                por_persona = round(share_rol / n_personas)
+                if n_personas == 1:
+                    st.write(f"{nombre}: ${share_rol:,}")
+                else:
+                    st.write(
+                        f"{nombre}: ${share_rol:,} → ${por_persona:,} c/u "
+                        f"({n_personas} personas, 50/50)"
+                    )
+                resumen.append((nombre, share_rol, n_personas, por_persona))
+
+            # Verificación de cuadre
+            repartido = sum(r[1] for r in resumen)
+            descuadre = disponible - repartido
+            if abs(descuadre) > 0:
+                st.caption(
+                    f"Ajuste por redondeo: ${descuadre:,} "
+                    "(se suma al fondo operacional)."
+                )
+
+            st.divider()
+            st.caption(
+                "El gestor cobra su porcentaje aunque también haya hecho un rol; "
+                "en ese caso suma ambos montos. Nadie cobra hasta que el cliente "
+                "haya pagado."
             )
 
 
@@ -539,5 +652,32 @@ $$
 | Material TPU | $p_m$ | 25 CLP/g |
 | Tarifa manual | $R_{manual}$ | 5.000 CLP/h |
 | Despacho | $F_{despacho}$ | 4.000 CLP |
+
+---
+
+### Liquidación: reparto entre colaboradores
+
+El pago a cada colaborador se calcula sobre el **total cobrado al cliente**, no
+por porcentajes fijos de rol. La lógica: cada quien cobra en proporción al valor
+que aportó en esa cotización específica.
+
+El orden de los descuentos es:
+
+$$
+\\text{Disponible} = T - (T \\cdot f) - (T \\cdot g)
+$$
+
+donde $T$ es el total cobrado, $f$ el fondo operacional (8%) y $g$ el porcentaje
+de gestión (variable). Lo disponible se reparte entre roles:
+
+$$
+\\text{Pago}_{rol} = \\text{Disponible} \\cdot \\frac{V_{rol}}{\\sum V_{rol}}
+$$
+
+Si un rol lo realizan varias personas, el pago de ese rol se divide en partes
+iguales (50/50 si son dos). El gestor cobra su porcentaje aparte; si además hizo
+un rol, suma ambos montos.
+
+**Regla firme:** nadie cobra hasta que el cliente haya pagado.
 """
     )
