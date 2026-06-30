@@ -277,13 +277,128 @@ def build_report_pdf(data):
     return buffer.getvalue()
 
 
-# ======================================================
-# UI PRINCIPAL
-# ======================================================
+def compute_liquidation(totals, people, gestion_pct, gestor):
+    """
+    Calcula el reparto entre colaboradores.
+    totals: dict con design/print/handwork/delivery (valor cobrado por componente)
+    people: dict con nº de personas por rol
+    Retorna dict con fondo, gestión y lista de pagos por rol.
+    """
+    total = sum(totals.values())
+    fondo = round(total * FONDO_OPERACIONAL)
+    gestion = round(total * gestion_pct)
+    disponible = total - fondo - gestion
+
+    roles_def = [
+        ("Diseño", totals["design"], people["design"]),
+        ("Impresión", totals["print"], people["print"]),
+        ("Post-procesado", totals["handwork"], people["handwork"]),
+        ("Despacho", totals["delivery"], people["delivery"]),
+    ]
+    valor_total = sum(v for _, v, _ in roles_def) or 1
+
+    pagos = []
+    for nombre, valor, n in roles_def:
+        if valor <= 0 or n <= 0:
+            continue
+        share = round(disponible * (valor / valor_total))
+        por_persona = round(share / n)
+        pagos.append({
+            "rol": nombre, "total_rol": share,
+            "personas": n, "por_persona": por_persona,
+        })
+
+    return {
+        "total": total, "fondo": fondo, "gestion": gestion,
+        "gestion_pct": gestion_pct, "gestor": gestor,
+        "disponible": disponible, "pagos": pagos,
+    }
+
+
+def build_liquidation_pdf(liq, cliente, fecha):
+    """Genera el PDF de liquidación interna (no se entrega al cliente)."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=22 * mm, rightMargin=22 * mm,
+        topMargin=20 * mm, bottomMargin=20 * mm,
+    )
+    ink = colors.HexColor("#1a1a1a")
+    muted = colors.HexColor("#6b6b6b")
+    line = colors.HexColor("#d9d9d9")
+    accent = colors.HexColor("#2b2b2b")
+
+    h_company = ParagraphStyle("c", fontName="Helvetica-Bold", fontSize=16, textColor=ink, spaceAfter=2, leading=19)
+    h_sub = ParagraphStyle("s", fontName="Helvetica", fontSize=9.5, textColor=muted, leading=12)
+    doc_title = ParagraphStyle("d", fontName="Helvetica", fontSize=10, textColor=muted, alignment=TA_RIGHT, leading=13)
+    section = ParagraphStyle("sec", fontName="Helvetica-Bold", fontSize=10.5, textColor=accent, spaceBefore=14, spaceAfter=6, leading=13)
+    body = ParagraphStyle("b", fontName="Helvetica", fontSize=9.5, textColor=ink, leading=14)
+    note = ParagraphStyle("n", fontName="Helvetica", fontSize=8.5, textColor=muted, leading=12)
+
+    story = []
+    header = Table([
+        [Paragraph("Cotizador Piezas 3D", h_company), Paragraph("LIQUIDACIÓN INTERNA", doc_title)],
+        [Paragraph("Reparto entre colaboradores", h_sub), Paragraph(fecha, doc_title)],
+    ], colWidths=[100 * mm, 66 * mm])
+    header.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(header)
+    story.append(Spacer(1, 6))
+    story.append(Table([[""]], colWidths=[166 * mm], style=TableStyle([("LINEBELOW", (0, 0), (-1, -1), 1, accent)])))
+    story.append(Spacer(1, 10))
+
+    story.append(Paragraph(f"<font color='#6b6b6b'>Cliente:</font> {cliente or '—'}", body))
+    story.append(Paragraph(f"<font color='#6b6b6b'>Total cobrado:</font> {clp(liq['total'])}", body))
+
+    story.append(Paragraph("Descuentos previos", section))
+    desc = Table([
+        [Paragraph(f"Fondo operacional ({int(FONDO_OPERACIONAL*100)}%)", body), clp(liq["fondo"])],
+        [Paragraph(f"Gestión — {liq['gestor']} ({int(liq['gestion_pct']*100)}%)", body), clp(liq["gestion"])],
+        [Paragraph("<b>Disponible para roles</b>", body), Paragraph(f"<b>{clp(liq['disponible'])}</b>", body)],
+    ], colWidths=[126 * mm, 40 * mm])
+    desc.setStyle(TableStyle([
+        ("ALIGN", (-1, 0), (-1, -1), "RIGHT"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.5, line),
+    ]))
+    story.append(desc)
+
+    story.append(Paragraph("Pago por rol", section))
+    rows = [["Rol", "Personas", "Pago c/u", "Total rol"]]
+    for p in liq["pagos"]:
+        rows.append([
+            Paragraph(p["rol"], body), str(p["personas"]),
+            clp(p["por_persona"]), clp(p["total_rol"]),
+        ])
+    pago_tbl = Table(rows, colWidths=[70 * mm, 28 * mm, 34 * mm, 34 * mm])
+    pago_tbl.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TEXTCOLOR", (0, 0), (-1, 0), accent),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, line),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.5, line),
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(pago_tbl)
+
+    story.append(Spacer(1, 16))
+    story.append(Paragraph(
+        "Documento interno, no se entrega al cliente. El gestor cobra su porcentaje "
+        "aparte; si además realizó un rol, suma ambos montos. Nadie cobra hasta que "
+        "el cliente haya pagado.", note))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 st.set_page_config(page_title="Cotizador Piezas 3D", page_icon="🛠️", layout="centered")
 
-tab_cot, tab_liq, tab_tutorial = st.tabs(["🛠️ Cotizar", "💸 Liquidación", "📘 Tutorial"])
+tab_cot, tab_tutorial = st.tabs(["🛠️ Cotizar", "📘 Tutorial"])
 
 # ------------------------------------------------------
 # PESTAÑA: COTIZAR
@@ -342,6 +457,19 @@ with tab_cot:
     handwork_time = st.text_input("Post-procesado / trabajo manual (00h00m)", "00h00m")
     delivery = st.checkbox("Requiere despacho")
 
+    # --- Reparto entre colaboradores ---
+    st.subheader("Reparto entre colaboradores")
+    st.caption("Para calcular automáticamente cuánto cobra cada quien.")
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        n_design = st.number_input("Diseñadores", min_value=0, max_value=10, value=1, step=1)
+        n_print = st.number_input("Operadores impresión", min_value=0, max_value=10, value=1, step=1)
+    with pc2:
+        n_handwork = st.number_input("Post-procesado (personas)", min_value=0, max_value=10, value=0, step=1)
+        n_delivery = st.number_input("Despacho (personas)", min_value=0, max_value=10, value=0, step=1)
+    gestor = st.text_input("Gestor (quien trajo al cliente)", value=GESTOR_DEFAULT)
+    gestion_tier = st.selectbox("Nivel de gestión", list(GESTION_TIERS.keys()))
+
     # --- Cálculo ---
     if st.button("Calcular cotización", type="primary"):
         design_total = sum(v for _, v in design_items)
@@ -396,6 +524,44 @@ with tab_cot:
 
         st.divider()
 
+        # --- Liquidación automática entre colaboradores ---
+        st.subheader("💸 Liquidación entre colaboradores")
+        liq = compute_liquidation(
+            totals={
+                "design": design_total, "print": print_total,
+                "handwork": handwork_total, "delivery": delivery_total,
+            },
+            people={
+                "design": n_design, "print": n_print,
+                "handwork": n_handwork, "delivery": n_delivery,
+            },
+            gestion_pct=GESTION_TIERS[gestion_tier],
+            gestor=gestor,
+        )
+
+        st.write(f"Fondo operacional ({int(FONDO_OPERACIONAL*100)}%): ${liq['fondo']:,}")
+        st.write(f"Gestión — {liq['gestor']} ({int(liq['gestion_pct']*100)}%): ${liq['gestion']:,}")
+        st.write(f"**Disponible para roles: ${liq['disponible']:,}**")
+
+        for p in liq["pagos"]:
+            if p["personas"] == 1:
+                st.write(f"{p['rol']}: ${p['total_rol']:,}")
+            else:
+                st.write(
+                    f"{p['rol']}: ${p['total_rol']:,} → ${p['por_persona']:,} c/u "
+                    f"({p['personas']} personas, 50/50)"
+                )
+
+        liq_pdf = build_liquidation_pdf(liq, cliente, report_data["fecha"])
+        st.download_button(
+            label="📄 Descargar liquidación interna (.pdf)",
+            data=liq_pdf,
+            file_name=f"liquidacion_{(cliente or 'cliente').replace(' ', '_')}.pdf",
+            mime="application/pdf",
+        )
+
+        st.divider()
+
         # --- Botón de contabilidad (PRE-HECHO, sin desarrollar) ---
         st.caption("Cuando el trabajo esté cerrado y pagado:")
         if st.button("✅ Registrar en libro contable (próximamente)"):
@@ -415,107 +581,6 @@ with tab_cot:
             )
 
 
-# ------------------------------------------------------
-# PESTAÑA: LIQUIDACIÓN (reparto entre colaboradores)
-# ------------------------------------------------------
-with tab_liq:
-    st.title("💸 Liquidación por rol")
-    st.caption("Reparto justo según el valor que aporta cada colaborador.")
-
-    st.markdown(
-        "Ingresa el valor cobrado al cliente por cada componente del trabajo. "
-        "El reparto se calcula sobre el **total cobrado**: primero sale el fondo "
-        "operacional, luego la gestión, y lo restante se divide entre los roles "
-        "según el valor que cada uno generó."
-    )
-
-    st.subheader("Valor por componente (CLP)")
-    col1, col2 = st.columns(2)
-    with col1:
-        liq_design = st.number_input("Diseño CAD", min_value=0, step=1000, value=0, key="liq_d")
-        liq_print = st.number_input("Impresión", min_value=0, step=1000, value=0, key="liq_p")
-    with col2:
-        liq_handwork = st.number_input("Post-procesado", min_value=0, step=1000, value=0, key="liq_h")
-        liq_delivery = st.number_input("Despacho", min_value=0, step=1000, value=0, key="liq_del")
-
-    st.subheader("Personas por rol")
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        n_design = st.number_input("Diseñadores", min_value=0, max_value=10, value=1, step=1, key="n_d")
-        n_print = st.number_input("Operadores de impresión", min_value=0, max_value=10, value=1, step=1, key="n_p")
-    with cc2:
-        n_handwork = st.number_input("Post-procesado", min_value=0, max_value=10, value=0, step=1, key="n_h")
-        n_delivery = st.number_input("Despacho", min_value=0, max_value=10, value=0, step=1, key="n_del")
-
-    st.subheader("Gestión")
-    gestor = st.text_input("Nombre del gestor (quien trajo al cliente)", value=GESTOR_DEFAULT)
-    gestion_tier = st.selectbox("Nivel de gestión", list(GESTION_TIERS.keys()))
-
-    if st.button("Calcular liquidación", type="primary", key="btn_liq"):
-        total_cobrado = liq_design + liq_print + liq_handwork + liq_delivery
-
-        if total_cobrado == 0:
-            st.warning("Ingresa al menos un valor para calcular la liquidación.")
-        else:
-            # 1. Fondo operacional (sale primero)
-            fondo = round(total_cobrado * FONDO_OPERACIONAL)
-            # 2. Gestión (sale segundo)
-            gestion_pct = GESTION_TIERS[gestion_tier]
-            gestion = round(total_cobrado * gestion_pct)
-            # 3. Restante a repartir entre roles
-            disponible = total_cobrado - fondo - gestion
-
-            # Cada rol recibe en proporción al valor que generó.
-            roles = [
-                ("Diseño", liq_design, n_design),
-                ("Impresión", liq_print, n_print),
-                ("Post-procesado", liq_handwork, n_handwork),
-                ("Despacho", liq_delivery, n_delivery),
-            ]
-            valor_total_roles = sum(v for _, v, _ in roles)
-
-            st.success(f"💰 Total cobrado al cliente: ${total_cobrado:,}")
-
-            st.markdown("#### Descuentos previos")
-            st.write(f"Fondo operacional ({int(FONDO_OPERACIONAL*100)}%): ${fondo:,}")
-            st.write(f"Gestión — {gestor} ({int(gestion_pct*100)}%): ${gestion:,}")
-            st.write(f"**Disponible para roles: ${disponible:,}**")
-
-            st.markdown("#### Pago por colaborador")
-            resumen = []
-            for nombre, valor, n_personas in roles:
-                if valor == 0 or n_personas == 0:
-                    continue
-                # proporción del valor de este rol sobre el total de roles
-                share_rol = round(disponible * (valor / valor_total_roles))
-                por_persona = round(share_rol / n_personas)
-                if n_personas == 1:
-                    st.write(f"{nombre}: ${share_rol:,}")
-                else:
-                    st.write(
-                        f"{nombre}: ${share_rol:,} → ${por_persona:,} c/u "
-                        f"({n_personas} personas, 50/50)"
-                    )
-                resumen.append((nombre, share_rol, n_personas, por_persona))
-
-            # Verificación de cuadre
-            repartido = sum(r[1] for r in resumen)
-            descuadre = disponible - repartido
-            if abs(descuadre) > 0:
-                st.caption(
-                    f"Ajuste por redondeo: ${descuadre:,} "
-                    "(se suma al fondo operacional)."
-                )
-
-            st.divider()
-            st.caption(
-                "El gestor cobra su porcentaje aunque también haya hecho un rol; "
-                "en ese caso suma ambos montos. Nadie cobra hasta que el cliente "
-                "haya pagado."
-            )
-
-
-# ------------------------------------------------------
 # PESTAÑA: TUTORIAL
 # ------------------------------------------------------
 with tab_tutorial:
