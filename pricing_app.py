@@ -16,26 +16,42 @@ from reportlab.lib.enums import TA_RIGHT
 # CONFIGURACIÓN Y CONSTANTES  (todo en CLP)
 # ======================================================
 
-# --- Materiales de impresión (CLP por gramo) ---
+# --- Materiales de impresión (CLP por gramo) — valores validar contra proveedor ---
 MATERIAL_PRICES = {
     "PLA": 20,
-    "ABS": 13,
-    "PETG": 16,
-    "TPU": 25,
+    "PETG": 22,
+    "ABS": 24,
+    "ASA": 29,    # material CORE para piezas T1 (resiste vibración y calor)
+    "TPU": 31,
 }
 
-# --- Energía (componente menor, transparencia) ---
-PRINTER_POWER_KW = 0.13
-ELECTRICITY_PRICE = 200
+# --- Energía y máquinas ---
+ELECTRICITY_PRICE = 200          # CLP por kWh
 
-# --- Impresión: la hora-impresora es el driver principal ---
-TARIFA_IMPRESORA_HORA = 2000     # CLP/h — desgaste, atención, riesgo, oportunidad
+# Cada máquina tiene su propia potencia y tarifa hora-impresora.
+# La tarifa refleja: costo de máquina amortizado, velocidad, capacidad de
+# material técnico, tasa de falla, y ocupación del recurso.
+PRINTERS = {
+    "Ender 3":         {"W": 0.13, "R_imp": 1500, "apta_tecnico": False},
+    "Ender 3 V3 SE":   {"W": 0.13, "R_imp": 2000, "apta_tecnico": False},
+    "K1C (encerrada)": {"W": 0.35, "R_imp": 4000, "apta_tecnico": True},
+}
+MATERIALES_TECNICOS = {"ASA", "ABS"}   # requieren máquina apta
+
+# --- Impresión: complejidad y piso ---
 COMPLEXITY_FEES = {
     "Simple (sin soportes, imprime sola)": 0,
     "Media (algunos soportes / vigilancia)": 1500,
     "Compleja (muchos soportes / alto riesgo)": 3000,
 }
-MINIMUM_PRINT_FEE = 4000         # piso por pieza impresa
+MINIMUM_PRINT_FEE = 4000
+
+# --- T1 (import-substitution): value-based override ---
+# El precio ancla captura una fracción del import evitado; el resto es
+# el incentivo del cliente por comprar local y rápido.
+T1_CAPTURE_FACTOR = 0.65         # validar entre 0.60 y 0.75
+# En piezas T1 NUEVAS, la merma cubre reimpresiones y ajuste dimensional.
+MERMA_T1_NUEVA = 1.5
 
 # --- Diseño CAD (tarifa fija por entregable) ---
 DESIGN_FIXED = {
@@ -68,7 +84,10 @@ HANDWORK_RATE = 5000
 SUBCON_MARKUP = 0.25             # 25% si se activa el markup
 DELIVERY_FEE = 4000
 
-# --- Reparto entre colaboradores ---
+# --- Reparto entre colaboradores — INACTIVO (un solo dueño hoy) ---
+# Se conserva para el futuro cuando el negocio se formalice como SpA con socios.
+# Hoy, el pago a ingenieros externos es COSTO DIRECTO del trabajo, no reparto
+# proporcional. Ver "Mano de obra externa" en la UI.
 FONDO_OPERACIONAL = 0.08
 GESTION_TIERS = {
     "Cliente conseguido + reunión técnica (12%)": 0.12,
@@ -107,14 +126,33 @@ def clp(n):
     return f"${n:,.0f}".replace(",", ".")
 
 
-def print_piece_cost(material, grams, time_hours, complexity_label):
-    """Costo de una pieza impresa (hora-impresora + material + complejidad, con piso)."""
-    material_cost = grams * MATERIAL_PRICES[material]
-    energy_cost = time_hours * PRINTER_POWER_KW * ELECTRICITY_PRICE
-    printer_cost = time_hours * TARIFA_IMPRESORA_HORA
+def print_piece_cost(material, grams, time_hours, complexity_label,
+                     machine, es_T1=False, repite_diseno=False,
+                     precio_import_landed=0):
+    """
+    Costo de una pieza impresa.
+    - Piso cost-plus siempre aplica: material + energía + hora-máquina + K, con F_min.
+    - Si es T1 con precio_import_landed conocido, aplica el ancla value-based:
+      precio = max(cost_plus, import × factor).
+    - Merma T1 solo aplica a piezas T1 nuevas (repite_diseno = False).
+    """
+    W = PRINTERS[machine]["W"]
+    R_imp = PRINTERS[machine]["R_imp"]
+
+    merma = MERMA_T1_NUEVA if (es_T1 and not repite_diseno) else 1.0
+    grams_facturables = grams * merma
+
+    material_cost = grams_facturables * MATERIAL_PRICES[material]
+    energy_cost = time_hours * W * ELECTRICITY_PRICE
+    printer_cost = time_hours * R_imp
     complexity_fee = COMPLEXITY_FEES.get(complexity_label, 0)
     raw = material_cost + energy_cost + printer_cost + complexity_fee
-    return round(max(raw, MINIMUM_PRINT_FEE))
+    cost_plus = max(raw, MINIMUM_PRINT_FEE)
+
+    if es_T1 and precio_import_landed > 0:
+        ancla = precio_import_landed * T1_CAPTURE_FACTOR
+        return round(max(cost_plus, ancla))
+    return round(cost_plus)
 
 
 def subcon_client_price(cost, apply_markup):
@@ -151,7 +189,7 @@ def _pdf_styles():
 
 def _header(story, s, subtitle, fecha, doc_label):
     header = Table([
-        [Paragraph("Cotizador Piezas 3D", s["company"]), Paragraph(doc_label, s["title"])],
+        [Paragraph("DFP Ingeniería — Cotizador", s["company"]), Paragraph(doc_label, s["title"])],
         [Paragraph(subtitle, s["sub"]), Paragraph(fecha, s["title"])],
     ], colWidths=[100 * mm, 66 * mm])
     header.setStyle(TableStyle([
@@ -332,11 +370,11 @@ def compute_liquidation(role_values, people, terceros, gestion_pct, gestor):
 # UI PRINCIPAL
 # ======================================================
 
-st.set_page_config(page_title="Cotizador Piezas 3D", page_icon="🛠️", layout="centered")
+st.set_page_config(page_title="DFP Ingeniería — Cotizador", page_icon="🛠️", layout="centered")
 tab_cot, tab_tutorial = st.tabs(["🛠️ Cotizar", "📘 Tutorial"])
 
 with tab_cot:
-    st.title("🛠️ Cotizador Piezas 3D")
+    st.title("🛠️ DFP Ingeniería — Cotizador")
     st.caption("Diseño CAD · impresión · fabricación subcontratada · terminación")
 
     cliente = st.text_input("Nombre del cliente")
@@ -395,17 +433,56 @@ with tab_cot:
                     ("Transferencia de archivos CAD nativos", value))
 
             elif itype == "Pieza impresa 3D":
-                material = st.selectbox("Material", list(MATERIAL_PRICES.keys()), key=f"mat_{i}")
-                grams = st.number_input("Gramos", min_value=0.0, step=1.0, key=f"g_{i}")
+                es_T1 = st.checkbox(
+                    "Pieza T1 (sustitución de importación)",
+                    value=False, key=f"t1_{i}",
+                    help=("Marca esto si la pieza reemplaza una que el cliente "
+                          "importaría desde el extranjero. Aplica precio "
+                          "value-based ancla al import."))
+                repite_diseno = False
+                precio_import_landed = 0
+                if es_T1:
+                    repite_diseno = st.checkbox(
+                        "Es repetición de un diseño ya validado",
+                        value=False, key=f"rep_{i}",
+                        help=("Salta merma y no cobra diseño CAD aparte "
+                              "(el diseño se subsume en el ancla T1)."))
+                    precio_import_landed = st.number_input(
+                        "Precio de la alternativa importada puesta en Chile (CLP)",
+                        min_value=0, step=5000, key=f"imp_{i}",
+                        help="Precio USD + envío + aduana. Base del cálculo ancla.")
+
+                material_options = list(MATERIAL_PRICES.keys())
+                material = st.selectbox("Material", material_options, key=f"mat_{i}")
+
+                # Filtro de máquina: si el material es técnico (ASA/ABS), forzar máquina apta.
+                # Además, en T1 forzamos K1C explícitamente.
+                if es_T1:
+                    machine_options = ["K1C (encerrada)"]
+                elif material in MATERIALES_TECNICOS:
+                    machine_options = [m for m, p in PRINTERS.items() if p["apta_tecnico"]]
+                else:
+                    machine_options = list(PRINTERS.keys())
+                machine = st.selectbox("Máquina", machine_options, key=f"mch_{i}")
+
+                grams = st.number_input("Gramos planeados", min_value=0.0, step=1.0, key=f"g_{i}")
                 ptime = st.text_input("Tiempo de impresión (00h00m)", "00h00m", key=f"t_{i}")
                 cx = st.selectbox("Complejidad", list(COMPLEXITY_FEES.keys()), key=f"cx_{i}")
                 qty = st.number_input("Cantidad", min_value=1, value=1, step=1, key=f"q_{i}")
-                unit = print_piece_cost(material, grams, parse_time(ptime), cx)
+
+                unit = print_piece_cost(
+                    material, grams, parse_time(ptime), cx, machine,
+                    es_T1=es_T1, repite_diseno=repite_diseno,
+                    precio_import_landed=precio_import_landed,
+                )
                 value = unit * int(qty)
+                tag = " [T1]" if es_T1 else ""
                 sections["Manufactura aditiva (impresión)"].append(
-                    (f"Pieza impresa {material} {grams:.0f}g × {int(qty)}", value))
+                    (f"Pieza impresa {material} {grams:.0f}g × {int(qty)}{tag}", value))
                 if grams > 0:
-                    st.caption(f"${unit:,} c/u × {int(qty)} = ${value:,}")
+                    modo = ("ancla T1" if (es_T1 and precio_import_landed *
+                            T1_CAPTURE_FACTOR > unit * 0.99) else "cost-plus")
+                    st.caption(f"${unit:,} c/u ({modo}) × {int(qty)} = ${value:,}")
 
             elif itype == "Pieza subcontratada":
                 desc = st.text_input("Descripción (ej: cilindro acero 18mm × 50mm)", key=f"sd_{i}")
@@ -455,18 +532,17 @@ with tab_cot:
             role_values[role] += value if role_add is None else role_add
 
     st.divider()
-    st.subheader("Reparto entre colaboradores")
-    pc1, pc2, pc3 = st.columns(3)
-    with pc1:
-        n_diseno = st.number_input("Diseñadores", min_value=0, max_value=10, value=1, step=1)
-        n_impr = st.number_input("Impresión", min_value=0, max_value=10, value=1, step=1)
-    with pc2:
-        n_subcon = st.number_input("Subcontratación", min_value=0, max_value=10, value=0, step=1)
-        n_post = st.number_input("Post-procesado", min_value=0, max_value=10, value=0, step=1)
-    with pc3:
-        n_desp = st.number_input("Despacho", min_value=0, max_value=10, value=0, step=1)
-    gestor = st.text_input("Gestor (quien trajo al cliente)", value=GESTOR_DEFAULT)
-    gestion_tier = st.selectbox("Nivel de gestión", list(GESTION_TIERS.keys()))
+    st.subheader("Mano de obra externa")
+    st.caption(
+        "Cuando un ingeniero externo ejecuta parte del trabajo, su pago es "
+        "**costo directo del trabajo** — no participación en utilidades. Se "
+        "resta del valor propio antes de calcular tu utilidad final. La "
+        "sección de reparto por rol está inactiva mientras haya un solo dueño."
+    )
+    costo_mano_obra_externa = st.number_input(
+        "Costo total pagado a ingenieros/colaboradores externos (CLP)",
+        min_value=0, step=5000, value=0,
+    )
 
     st.divider()
     st.subheader("Descuento manual")
@@ -488,11 +564,6 @@ with tab_cot:
         else:
             descuento_monto = round(subtotal_propio * (descuento_pct / 100))
             total = total_bruto - descuento_monto
-
-            # Escala proporcional de role_values para que la liquidación
-            # refleje el dinero realmente cobrado, no el precio de lista.
-            factor = (subtotal_propio - descuento_monto) / subtotal_propio if subtotal_propio > 0 else 1
-            role_values_final = {r: round(v * factor) for r, v in role_values.items()}
 
             iva_nota = ("No aplica (boleta de honorarios, persona natural)."
                         if tipo_cliente == "Particular"
@@ -525,36 +596,19 @@ with tab_cot:
             )
 
             st.divider()
-            st.subheader("💸 Liquidación entre colaboradores")
-            people = {"Diseño": n_diseno, "Impresión": n_impr, "Subcontratación": n_subcon,
-                      "Post-procesado": n_post, "Despacho": n_desp}
-            liq = compute_liquidation(
-                role_values=role_values_final, people=people, terceros=terceros_cost,
-                gestion_pct=GESTION_TIERS[gestion_tier], gestor=gestor,
-            )
-            if descuento_monto:
-                st.caption(
-                    f"El descuento de ${descuento_monto:,} se descontó de tu valor agregado "
-                    "antes del reparto. El costo de terceros no se vio afectado."
-                )
-            st.write(f"Base de reparto (sin costo de terceros): ${liq['base']:,}")
-            st.write(f"Fondo operacional ({int(FONDO_OPERACIONAL*100)}%): ${liq['fondo']:,}")
-            st.write(f"Gestión — {liq['gestor']} ({int(liq['gestion_pct']*100)}%): ${liq['gestion']:,}")
-            st.write(f"**Disponible para roles: ${liq['disponible']:,}**")
-            for p in liq["pagos"]:
-                if p["personas"] == 1:
-                    st.write(f"{p['rol']}: ${p['total_rol']:,}")
-                else:
-                    st.write(f"{p['rol']}: ${p['total_rol']:,} → ${p['por_persona']:,} c/u "
-                             f"({p['personas']} personas)")
-            if liq["terceros"] > 0:
-                st.caption(f"Costo de terceros (pagado a proveedores externos, no se reparte): ${liq['terceros']:,}")
-
-            st.download_button(
-                "📄 Descargar liquidación interna (.pdf)",
-                data=build_liquidation_pdf(liq, cliente, quote_data["fecha"]),
-                file_name=f"liquidacion_{(cliente or 'cliente').replace(' ', '_')}.pdf",
-                mime="application/pdf",
+            st.subheader("💰 Resumen económico")
+            valor_propio = total_bruto - terceros_cost
+            utilidad_dueno = valor_propio - descuento_monto - costo_mano_obra_externa
+            st.write(f"Total al cliente: ${total:,}")
+            st.write(f"Costo de terceros (pagado al taller/proveedor): ${terceros_cost:,}")
+            if costo_mano_obra_externa > 0:
+                st.write(f"Mano de obra externa: ${costo_mano_obra_externa:,}")
+            if descuento_monto > 0:
+                st.write(f"Descuento otorgado al cliente: ${descuento_monto:,}")
+            st.write(f"**Utilidad del dueño: ${utilidad_dueno:,}**")
+            st.caption(
+                "Utilidad = valor propio − descuento − mano de obra externa. "
+                "No incluye impuestos ni costos fijos (contador, arriendo, etc.)."
             )
 
 
@@ -564,31 +618,75 @@ with tab_tutorial:
         """
 ### Modelo de ítems
 Cada trabajo es una lista de **ítems independientes**. Agregas los que
-necesites, de cualquier tipo, en cualquier combinación. Esto permite cotizar
-un plano solo, una pieza impresa sin plano, o una pieza que no fabricas tú
-pero sí diseñas.
+necesites, de cualquier tipo, en cualquier combinación.
 
 **Tipos de ítem disponibles:**
-- **Diseño CAD** — tarifa fija por entregable, no por hora
-- **Plano técnico** — entregable independiente; lo cobras aunque otro fabrique la pieza
+- **Diseño CAD** — tarifa fija por entregable (no aplica a T1 nuevos, ver abajo)
+- **Plano técnico** — entregable independiente; se cobra aunque otro fabrique la pieza
 - **Transferencia CAD** — derecho sobre los archivos nativos
-- **Pieza impresa 3D** — modelo hora-impresora (material + tiempo × tarifa + complejidad)
-- **Pieza subcontratada** — la fabrica un taller externo; ingresas su costo + markup opcional
-- **Material / insumo** — cilindros de acero, insertos, tornillería; costo + markup opcional
-- **Terminación** — menú de acabados (lijado, primer+pintura, resina UV, premium)
-- **Ensamblaje / manual** — tu tiempo de trabajo a mano
+- **Pieza impresa 3D** — modelo hora-máquina + T1 opcional
+- **Pieza subcontratada** — la fabrica un taller externo; costo + markup opcional
+- **Material / insumo** — insumos comprados; costo + markup opcional
+- **Terminación** — menú de acabados
+- **Ensamblaje / manual** — tiempo de trabajo a mano
 - **Despacho** — tarifa fija
 
 ---
 
-### Subcontratación y material: markup
-Cuando marcas "aplicar markup 25%", el costo del taller o del insumo se
-multiplica por 1,25 en el precio al cliente. El **markup se queda en la empresa**
-y se reparte entre colaboradores; el **costo base se paga al proveedor externo**
-y NO entra al reparto.
+### Piezas T1 (import-substitution) — el corazón del negocio
+Una pieza **T1** es una pieza de ingeniería que sustituye una que el cliente
+importaría del extranjero (típicamente mounts de ECU, dashes, adaptadores
+automotrices). Su valor NO es el costo de fabricar — es la alternativa que el
+cliente evita.
 
-Ejemplo: taller cobra $8.000 por cilindros de acero. Con markup, el cliente paga
-$10.000. Los $8.000 van al taller; los $2.000 de markup entran a la base de reparto.
+Cuando marcas un ítem como T1 e ingresas el precio del import:
+
+$$
+\\text{precio}_{T1} = \\max(\\text{cost-plus}, \\text{precio\\_import} \\times \\text{factor})
+$$
+
+Donde `factor = 0.65` (capturas 65% del import, el resto es el incentivo del
+cliente por comprar local y rápido).
+
+**En T1 el diseño CAD no se cobra aparte** — se subsume en el precio ancla,
+porque cobrarlo a $28.000 por 10 horas equivale a $2.800/h, muy bajo para un
+ingeniero mecatrónico. El ancla ya incluye el valor del diseño profesional.
+
+**Repetición:** si activas "repite_diseño", saltas el diseño y desactivas la
+merma. Es el motor económico del negocio T1: el diseño es costo one-time,
+las siguientes ventas del mismo diseño tienen margen ~90%+.
+
+---
+
+### Materiales e impresora
+- Materiales técnicos (**ASA, ABS**) requieren máquina apta con enclosure
+  (**K1C**); el selector filtra automáticamente.
+- Piezas T1 se costean siempre con tarifa K1C.
+- **Merma T1 nueva:** los gramos se multiplican por 1,5 para cubrir prints
+  de prueba y ajuste dimensional. En repeticiones, merma = 1,0.
+
+| Máquina | Tarifa hora | Materiales técnicos |
+|---|---|---|
+| Ender 3 | $1.500/h | No |
+| Ender 3 V3 SE | $2.000/h | No |
+| K1C (encerrada) | $4.000/h | Sí (ASA, ABS) |
+
+---
+
+### Impresión — fórmula cost-plus (piso)
+$$
+\\text{costo} = (g \\times \\text{merma}) \\times p_m + t \\times W \\times E + t \\times R_{imp} + K
+$$
+
+Con piso mínimo por pieza: $4.000. Si el ítem es T1, este número es solo el
+piso — el precio final es `max(cost-plus, ancla_T1)`.
+
+---
+
+### Subcontratación y material: markup 25%
+El costo base se paga al proveedor externo (pass-through, no es tuyo). El
+markup (25% si activado) queda en la empresa. El descuento manual solo se
+aplica sobre tu valor agregado, nunca sobre el costo pass-through.
 
 ---
 
@@ -601,53 +699,23 @@ $10.000. Los $8.000 van al taller; los $2.000 de markup entran a la base de repa
 
 ---
 
-### Impresión — hora-impresora
-$$
-\\text{costo} = \\text{material} + \\text{energía} + (\\text{horas} \\times R_{imp}) + \\text{complejidad}
-$$
-- Tarifa hora-impresora: $2.000/h
-- Complejidad: $0 / $1.500 / $3.000 (soportes, vigilancia, riesgo)
-- Tarifa mínima por pieza: $4.000
-
----
-
 ### Descuento manual
-El descuento se aplica **solo sobre tu valor agregado** (diseño, impresión,
-terminación, tu markup) — nunca sobre el costo de terceros (taller, material
-comprado). Ese costo es fijo, se lo debes al proveedor externo tal cual, con o
-sin descuento al cliente.
-
-$$
-V_{propio} = \\sum \\text{valor de rol (sin costo de terceros)}
-$$
-
-$$
-\\text{Descuento (CLP)} = V_{propio} \\times \\frac{\\%\\text{descuento}}{100}
-$$
-
-$$
-\\text{Total final} = (\\text{Total bruto}) - \\text{Descuento (CLP)}
-$$
-
-El PDF de cotización muestra el subtotal, el descuento y el total por separado
-— nunca se oculta. La liquidación entre colaboradores se recalcula con el valor
-ya descontado, para que el reparto refleje el dinero real que entra, no el
-precio de lista. El costo de terceros no cambia.
-
-**Uso previsto:** este campo es para exploración/calibración, no para negociar
-a la baja por costumbre. Un descuento usado como reflejo entrena al cliente a
-desconfiar del precio inicial.
+Se aplica solo sobre el **valor propio** (total menos costo de terceros).
+El PDF muestra `subtotal → descuento → total` como líneas separadas.
 
 ---
 
-### Liquidación
-El reparto se calcula sobre la **base** (total menos costo de terceros, y menos
-el descuento si se aplicó). Primero sale el fondo operacional (8%), luego la
-gestión (%), y lo restante se divide entre roles según el valor que cada uno
-generó. Si un rol lo hacen varias personas, se divide en partes iguales.
+### Mano de obra externa (reemplaza reparto por rol)
+Cuando un ingeniero externo ejecuta parte del trabajo, su pago es **costo
+directo** del trabajo, no participación en utilidades. Se resta del valor
+propio para calcular la utilidad del dueño:
 
-**Regla firme:** nadie cobra hasta que el cliente haya pagado. El costo de
-terceros se paga al proveedor externo, no se reparte.
+$$
+\\text{utilidad} = \\text{valor propio} - \\text{descuento} - \\text{mano obra externa}
+$$
+
+La sección anterior de "reparto por rol" está inactiva mientras haya un solo
+dueño. Se reactivará si el negocio se formaliza como SpA con socios.
 
 ---
 
