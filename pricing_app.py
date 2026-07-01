@@ -200,6 +200,18 @@ def build_quote_pdf(data):
         story.append(t)
 
     story.append(Spacer(1, 14))
+    if data.get("descuento_monto", 0) > 0:
+        pre_tbl = Table([
+            [Paragraph("Subtotal", s["body"]), clp(data["total_bruto"])],
+            [Paragraph(f"Descuento ({data['descuento_pct']:.0f}%)", s["body"]),
+             f"-{clp(data['descuento_monto'])}"],
+        ], colWidths=[126 * mm, 40 * mm])
+        pre_tbl.setStyle(TableStyle([
+            ("ALIGN", (-1, 0), (-1, -1), "RIGHT"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(pre_tbl)
+
     total_tbl = Table([[
         Paragraph("<b>TOTAL</b>", ParagraphStyle("tl", parent=s["body"], fontSize=12)),
         Paragraph(f"<b>{clp(data['total'])}</b>",
@@ -456,12 +468,32 @@ with tab_cot:
     gestor = st.text_input("Gestor (quien trajo al cliente)", value=GESTOR_DEFAULT)
     gestion_tier = st.selectbox("Nivel de gestión", list(GESTION_TIERS.keys()))
 
-    if st.button("Calcular cotización", type="primary"):
-        total = sum(v for items in sections.values() for _, v in items)
+    st.divider()
+    st.subheader("Descuento manual")
+    st.caption(
+        "Se aplica solo sobre tu valor agregado (diseño, impresión, terminación, "
+        "tu markup). Nunca reduce lo que le debes a un tercero por subcontratación "
+        "o material — ese costo es fijo y no es tuyo para descontar."
+    )
+    descuento_pct = st.number_input(
+        "Descuento (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0
+    )
 
-        if total == 0:
+    if st.button("Calcular cotización", type="primary"):
+        total_bruto = sum(v for items in sections.values() for _, v in items)
+        subtotal_propio = sum(role_values.values())  # excluye costo de terceros
+
+        if total_bruto == 0:
             st.warning("Agrega al menos un ítem con valor para cotizar.")
         else:
+            descuento_monto = round(subtotal_propio * (descuento_pct / 100))
+            total = total_bruto - descuento_monto
+
+            # Escala proporcional de role_values para que la liquidación
+            # refleje el dinero realmente cobrado, no el precio de lista.
+            factor = (subtotal_propio - descuento_monto) / subtotal_propio if subtotal_propio > 0 else 1
+            role_values_final = {r: round(v * factor) for r, v in role_values.items()}
+
             iva_nota = ("No aplica (boleta de honorarios, persona natural)."
                         if tipo_cliente == "Particular"
                         else "Aplica al formalizar SpA (factura + 19%). Como persona natural, no aplica.")
@@ -471,11 +503,13 @@ with tab_cot:
                 "cliente": cliente, "tipo_cliente": tipo_cliente,
                 "doc_legal": "Boleta de honorarios electrónica",
                 "sections": list(sections.items()),
+                "total_bruto": total_bruto,
+                "descuento_pct": descuento_pct, "descuento_monto": descuento_monto,
                 "total": total, "iva_nota": iva_nota,
                 "nota_produccion": bool(sections["Diseño e ingeniería"]),
             }
 
-            st.success(f"💰 Total: ${total:,}")
+            st.success(f"💰 Total: ${total:,}" + (f"  (bruto ${total_bruto:,} − descuento ${descuento_monto:,})" if descuento_monto else ""))
             for sec_name, items in sections.items():
                 if items:
                     sub = sum(v for _, v in items)
@@ -495,9 +529,14 @@ with tab_cot:
             people = {"Diseño": n_diseno, "Impresión": n_impr, "Subcontratación": n_subcon,
                       "Post-procesado": n_post, "Despacho": n_desp}
             liq = compute_liquidation(
-                role_values=role_values, people=people, terceros=terceros_cost,
+                role_values=role_values_final, people=people, terceros=terceros_cost,
                 gestion_pct=GESTION_TIERS[gestion_tier], gestor=gestor,
             )
+            if descuento_monto:
+                st.caption(
+                    f"El descuento de ${descuento_monto:,} se descontó de tu valor agregado "
+                    "antes del reparto. El costo de terceros no se vio afectado."
+                )
             st.write(f"Base de reparto (sin costo de terceros): ${liq['base']:,}")
             st.write(f"Fondo operacional ({int(FONDO_OPERACIONAL*100)}%): ${liq['fondo']:,}")
             st.write(f"Gestión — {liq['gestor']} ({int(liq['gestion_pct']*100)}%): ${liq['gestion']:,}")
@@ -572,11 +611,40 @@ $$
 
 ---
 
+### Descuento manual
+El descuento se aplica **solo sobre tu valor agregado** (diseño, impresión,
+terminación, tu markup) — nunca sobre el costo de terceros (taller, material
+comprado). Ese costo es fijo, se lo debes al proveedor externo tal cual, con o
+sin descuento al cliente.
+
+$$
+V_{propio} = \\sum \\text{valor de rol (sin costo de terceros)}
+$$
+
+$$
+\\text{Descuento (CLP)} = V_{propio} \\times \\frac{\\%\\text{descuento}}{100}
+$$
+
+$$
+\\text{Total final} = (\\text{Total bruto}) - \\text{Descuento (CLP)}
+$$
+
+El PDF de cotización muestra el subtotal, el descuento y el total por separado
+— nunca se oculta. La liquidación entre colaboradores se recalcula con el valor
+ya descontado, para que el reparto refleje el dinero real que entra, no el
+precio de lista. El costo de terceros no cambia.
+
+**Uso previsto:** este campo es para exploración/calibración, no para negociar
+a la baja por costumbre. Un descuento usado como reflejo entrena al cliente a
+desconfiar del precio inicial.
+
+---
+
 ### Liquidación
-El reparto se calcula sobre la **base** (total menos costo de terceros). Primero
-sale el fondo operacional (8%), luego la gestión (%), y lo restante se divide
-entre roles según el valor que cada uno generó. Si un rol lo hacen varias
-personas, se divide en partes iguales.
+El reparto se calcula sobre la **base** (total menos costo de terceros, y menos
+el descuento si se aplicó). Primero sale el fondo operacional (8%), luego la
+gestión (%), y lo restante se divide entre roles según el valor que cada uno
+generó. Si un rol lo hacen varias personas, se divide en partes iguales.
 
 **Regla firme:** nadie cobra hasta que el cliente haya pagado. El costo de
 terceros se paga al proveedor externo, no se reparte.
