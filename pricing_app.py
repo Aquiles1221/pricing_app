@@ -44,7 +44,7 @@ COMPLEXITY_FEES = {
     "Media (algunos soportes / vigilancia)": 1500,
     "Compleja (muchos soportes / alto riesgo)": 3000,
 }
-MINIMUM_PRINT_FEE = 1000
+MINIMUM_PRINT_FEE = 0
 
 # --- T1 (import-substitution): value-based override ---
 # El precio ancla captura una fracción del import evitado; el resto es
@@ -81,7 +81,7 @@ FINISH_MENU = {
 HANDWORK_RATE = 5000
 
 # --- Subcontratación y material comprado ---
-SUBCON_MARKUP = 0.25             # 25% si se activa el markup
+SUBCON_MARKUP = 0.15             # 25% si se activa el markup
 DELIVERY_FEE = 4000
 
 # --- Reparto entre colaboradores — INACTIVO (un solo dueño hoy) ---
