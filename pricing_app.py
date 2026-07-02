@@ -44,7 +44,7 @@ COMPLEXITY_FEES = {
     "Media (algunos soportes / vigilancia)": 1500,
     "Compleja (muchos soportes / alto riesgo)": 3000,
 }
-MINIMUM_PRINT_FEE = 4000
+MINIMUM_PRINT_FEE = 1000
 
 # --- T1 (import-substitution): value-based override ---
 # El precio ancla captura una fracción del import evitado; el resto es
